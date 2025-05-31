@@ -1,8 +1,6 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Select, Modal, TextInput
-import datetime
-import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -10,21 +8,14 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]  # Deine Supportrollen-IDs
+SUPPORT_ROLES = [1376861514274836581]  # Deine Supportrollen-IDs
 CATEGORY_IDS = {
     "Technischer Support": 1378105582690631831,
-    "Allgemeine Fragen": 1378105647341502615,
-    "Bug melden": 1378105619579535510,
+    "Allgemeine Fragen": 1378105619579535510,
+    "Bug melden": 1378105647341502615,
 }
 
-TICKET_LOG_CHANNEL_ID = 1378351074586660937  # Channel für Ticket-Logs
-
-# Einfaches XP/Level-System als dict (In-Memory, nicht persistent)
-user_xp = {}
-
-def get_level(xp):
-    # Simple Levelformel, z.B. jede 100 XP = 1 Level
-    return xp // 100
+TICKET_LOG_CHANNEL_ID = 1378351074586660937  # Channel-ID für Ticket-Logs
 
 class ProblemModal(Modal, title="Beschreibe dein Problem"):
     problem = TextInput(label="Was ist dein Problem?", style=discord.TextStyle.paragraph)
@@ -38,11 +29,11 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
         guild = interaction.guild
         user = interaction.user
 
-        # Missbrauchserkennung: 1 Ticket pro User
+        # Missbrauchserkennung – prüfe, ob User bereits Ticket offen hat
         for channel in guild.text_channels:
             if channel.topic == str(user.id):
                 await interaction.response.send_message(
-                    "❌ Du hast bereits ein offenes Ticket. Bitte schließe es zuerst.",
+                    "❌ Du hast bereits ein offenes Ticket. Bitte schließe es, bevor du ein neues erstellst.",
                     ephemeral=True
                 )
                 return
@@ -71,11 +62,10 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
             title=f"Ticket: {self.ticket_type}",
             description=f"{self.user.mention} hat ein Ticket geöffnet.\n\n**Problem:**\n{self.problem.value}",
             color=discord.Color.blue(),
-            timestamp=datetime.datetime.utcnow()
         )
-        ping_roles = " ".join(f"<@&{role_id}>" for role_id in SUPPORT_ROLES)
 
         view = TicketView(self.user)
+        ping_roles = " ".join(f"<@&{role_id}>" for role_id in SUPPORT_ROLES)
         await ticket_channel.send(content=ping_roles, embed=embed, view=view)
         await interaction.response.send_message(
             f"✅ Dein Ticket wurde erstellt: {ticket_channel.mention}", ephemeral=True
@@ -83,7 +73,9 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
 
 class TicketTypeDropdown(Select):
     def __init__(self):
-        options = [discord.SelectOption(label=key, value=key) for key in CATEGORY_IDS.keys()]
+        options = [
+            discord.SelectOption(label=key, value=key) for key in CATEGORY_IDS.keys()
+        ]
         super().__init__(placeholder="Wähle den Ticket-Typ", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
@@ -100,7 +92,15 @@ class TicketView(View):
             await interaction.response.send_message("Nur der Ticket-Ersteller kann das Ticket schließen.", ephemeral=True)
             return
 
-        # Optional: Loggen, bevor löschen (hier nicht implementiert)
+        # Optional: Ticket-Logs speichern (Text in Log-Channel)
+        log_channel = interaction.guild.get_channel(TICKET_LOG_CHANNEL_ID)
+        if log_channel:
+            messages = await interaction.channel.history(limit=100).flatten()
+            log_text = f"Ticket von {self.user} (ID: {self.user.id})\n\n"
+            for msg in reversed(messages):
+                log_text += f"[{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {msg.author}: {msg.content}\n"
+            await log_channel.send(f"Ticket geschlossen:\n```{log_text}```")
+
         await interaction.channel.delete()
 
 @bot.event
@@ -113,40 +113,16 @@ async def ticket(ctx):
     view.add_item(TicketTypeDropdown())
     await ctx.send("Bitte wähle den Typ deines Tickets:", view=view)
 
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def clear(ctx, amount: int = 10):
+    await ctx.channel.purge(limit=amount)
+    await ctx.send(f"{amount} Nachrichten wurden gelöscht.", delete_after=5)
+
 @bot.event
 async def on_member_join(member):
     channel = discord.utils.get(member.guild.text_channels, name="willkommen")
     if channel:
         await channel.send(f"👋 Willkommen auf dem Server, {member.mention}!")
-
-@bot.command()
-async def xp(ctx):
-    user_id = ctx.author.id
-    xp = user_xp.get(user_id, 0)
-    level = get_level(xp)
-    embed = discord.Embed(title=f"Levelkarte von {ctx.author}", color=discord.Color.gold())
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.add_field(name="Level", value=str(level))
-    embed.add_field(name="XP", value=str(xp))
-    embed.set_footer(text="Sammle XP durch Chatten!")
-    await ctx.send(embed=embed)
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    # XP pro Nachricht
-    user_id = message.author.id
-    user_xp[user_id] = user_xp.get(user_id, 0) + 10
-    await bot.process_commands(message)
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def clear(ctx, amount: int):
-    if amount <= 0:
-        await ctx.send("Bitte gib eine positive Zahl an.")
-        return
-    deleted = await ctx.channel.purge(limit=amount + 1)  # +1, um den Befehl selbst zu löschen
-    await ctx.send(f"✅ Es wurden {len(deleted)-1} Nachrichten gelöscht.", delete_after=5)
 
 bot.run("DEIN_TOKEN_HIER")
