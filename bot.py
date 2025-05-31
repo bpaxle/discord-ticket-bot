@@ -112,4 +112,4 @@ async def on_member_join(member):
     if channel:
         await channel.send(f"👋 Willkommen auf dem Server, {member.mention}!")
 
-bot.run("DEIN_TOKEN")
+bot.run("TOKEN")
