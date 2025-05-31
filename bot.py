@@ -169,13 +169,16 @@ async def ticket_error(ctx, error):
         await ctx.send("Du hast keine Berechtigung, diesen Command zu nutzen.", delete_after=5)
 
 @bot.command()
+@commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int = 5):
     print(f"clear command von {ctx.author} ausgeführt, amount={amount}")
-    if not ctx.author.guild_permissions.manage_messages:
-        await ctx.send("Du hast keine Berechtigung zum Löschen.", delete_after=5)
-        return
     deleted = await ctx.channel.purge(limit=amount + 1)
     await ctx.send(f"{len(deleted)-1} Nachrichten gelöscht.", delete_after=5)
+
+@clear.error
+async def clear_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("Du hast keine Berechtigung zum Löschen.", delete_after=5)
 
 @bot.command()
 async def help(ctx):
@@ -209,7 +212,6 @@ async def on_member_join(member):
 
 @bot.event
 async def on_message(message):
-    # Blockiere DMs an Bot
     if not message.guild:
         return
     await bot.process_commands(message)
