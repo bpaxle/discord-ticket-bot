@@ -1,8 +1,8 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Select, Modal, TextInput
-import os
-import json
+import datetime
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -10,35 +10,21 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-SUPPORT_ROLES = [123456789012345678]  # Deine Supportrollen-IDs ersetzen
+SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]  # Deine Supportrollen-IDs
 CATEGORY_IDS = {
-    "Technischer Support": 111111111111111111,
-    "Allgemeine Fragen": 222222222222222222,
-    "Bug melden": 333333333333333333,
+    "Technischer Support": 1378105582690631831,
+    "Allgemeine Fragen": 1378105647341502615,
+    "Bug melden": 1378105619579535510,
 }
 
-TICKET_LOG_CHANNEL_ID = 444444444444444444  # Channel-ID für Ticket-Logs ersetzen
+TICKET_LOG_CHANNEL_ID = 1378351074586660937  # Channel für Ticket-Logs
 
-# --- Level-System Daten ---
-xp_data_file = "xp_data.json"
-
-def load_xp_data():
-    try:
-        with open(xp_data_file, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_xp_data(data):
-    with open(xp_data_file, "w") as f:
-        json.dump(data, f)
-
-xp_data = load_xp_data()
+# Einfaches XP/Level-System als dict (In-Memory, nicht persistent)
+user_xp = {}
 
 def get_level(xp):
-    # Simple Levelformel (z.B. Level = int(sqrt(xp / 100)))
-    import math
-    return int(math.sqrt(xp / 100))
+    # Simple Levelformel, z.B. jede 100 XP = 1 Level
+    return xp // 100
 
 class ProblemModal(Modal, title="Beschreibe dein Problem"):
     problem = TextInput(label="Was ist dein Problem?", style=discord.TextStyle.paragraph)
@@ -52,7 +38,7 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
         guild = interaction.guild
         user = interaction.user
 
-        # Missbrauchserkennung – prüfe, ob der User schon ein offenes Ticket hat
+        # Missbrauchserkennung: 1 Ticket pro User
         for channel in guild.text_channels:
             if channel.topic == str(user.id):
                 await interaction.response.send_message(
@@ -85,10 +71,11 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
             title=f"Ticket: {self.ticket_type}",
             description=f"{self.user.mention} hat ein Ticket geöffnet.\n\n**Problem:**\n{self.problem.value}",
             color=discord.Color.blue(),
+            timestamp=datetime.datetime.utcnow()
         )
+        ping_roles = " ".join(f"<@&{role_id}>" for role_id in SUPPORT_ROLES)
 
         view = TicketView(self.user)
-        ping_roles = " ".join(f"<@&{role_id}>" for role_id in SUPPORT_ROLES)
         await ticket_channel.send(content=ping_roles, embed=embed, view=view)
         await interaction.response.send_message(
             f"✅ Dein Ticket wurde erstellt: {ticket_channel.mention}", ephemeral=True
@@ -96,9 +83,7 @@ class ProblemModal(Modal, title="Beschreibe dein Problem"):
 
 class TicketTypeDropdown(Select):
     def __init__(self):
-        options = [
-            discord.SelectOption(label=key, value=key) for key in CATEGORY_IDS.keys()
-        ]
+        options = [discord.SelectOption(label=key, value=key) for key in CATEGORY_IDS.keys()]
         super().__init__(placeholder="Wähle den Ticket-Typ", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
@@ -115,11 +100,7 @@ class TicketView(View):
             await interaction.response.send_message("Nur der Ticket-Ersteller kann das Ticket schließen.", ephemeral=True)
             return
 
-        # Optional: Log schreiben
-        log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"Ticket von {self.user} wurde geschlossen: {interaction.channel.mention}")
-
+        # Optional: Loggen, bevor löschen (hier nicht implementiert)
         await interaction.channel.delete()
 
 @bot.event
@@ -140,24 +121,32 @@ async def on_member_join(member):
 
 @bot.command()
 async def xp(ctx):
-    user = ctx.author
-    user_id = str(user.id)
-
-    # XP erhöhen
-    xp_data[user_id] = xp_data.get(user_id, 0) + 10  # +10 XP pro !xp-Aufruf (oder ändere nach Wunsch)
-    save_xp_data(xp_data)
-
-    xp = xp_data[user_id]
+    user_id = ctx.author.id
+    xp = user_xp.get(user_id, 0)
     level = get_level(xp)
-
-    # "Levelkarte" als Text (ohne Bild)
-    embed = discord.Embed(title=f"{user.name}s Levelkarte", color=discord.Color.green())
-    embed.set_thumbnail(url=user.avatar.url if user.avatar else user.default_avatar.url)
-    embed.add_field(name="Level", value=str(level), inline=True)
-    embed.add_field(name="XP", value=str(xp), inline=True)
-    embed.set_footer(text="Einfach !xp tippen, um XP zu sammeln!")
-
+    embed = discord.Embed(title=f"Levelkarte von {ctx.author}", color=discord.Color.gold())
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.add_field(name="Level", value=str(level))
+    embed.add_field(name="XP", value=str(xp))
+    embed.set_footer(text="Sammle XP durch Chatten!")
     await ctx.send(embed=embed)
 
-# Token sicher aus Umgebungsvariablen laden
-bot.run(os.getenv("TOKEN"))
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    # XP pro Nachricht
+    user_id = message.author.id
+    user_xp[user_id] = user_xp.get(user_id, 0) + 10
+    await bot.process_commands(message)
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def clear(ctx, amount: int):
+    if amount <= 0:
+        await ctx.send("Bitte gib eine positive Zahl an.")
+        return
+    deleted = await ctx.channel.purge(limit=amount + 1)  # +1, um den Befehl selbst zu löschen
+    await ctx.send(f"✅ Es wurden {len(deleted)-1} Nachrichten gelöscht.", delete_after=5)
+
+bot.run("DEIN_TOKEN_HIER")
