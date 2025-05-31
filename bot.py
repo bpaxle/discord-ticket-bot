@@ -6,26 +6,25 @@ TOKEN = os.getenv("DEIN_TOKEN")
 
 import discord
 from discord.ext import commands
+import asyncio
+from datetime import datetime, timezone, timedelta
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # Wichtig für on_member_join
+intents.members = True
 
-# Bot ohne Standard-Help-Command, damit eigener Help Command möglich ist
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# IDs anpassen:
-SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]  # Rollen mit Supportrechten
-AUTO_ROLE_ID = 1378097824041799792  # Rolle, die neuen Mitgliedern automatisch vergeben wird
+SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]
+AUTO_ROLE_ID = 1378097824041799792
 
-# Ticket-Kategorien (IDs anpassen)
 CATEGORY_IDS = {
     "Technischer Support": 1378105582690631831,
     "Bug": 1378105647341502615,
     "Discord Hilfe": 1378105619579535510,
 }
 
-TEAM_ROLE_IDS = SUPPORT_ROLES  # Rollen die Tickets übernehmen/schließen dürfen
+TEAM_ROLE_IDS = SUPPORT_ROLES
 
 class ProblemModal(discord.ui.Modal):
     def __init__(self, ticket_type, user):
@@ -68,6 +67,9 @@ class ProblemModal(discord.ui.Modal):
         ping_roles = " ".join(f"<@&{role_id}>" for role_id in SUPPORT_ROLES)
         await ticket_channel.send(content=ping_roles, embed=embed, view=view)
         await interaction.response.send_message(f"Dein Ticket wurde erstellt: {ticket_channel.mention}", ephemeral=True)
+
+        # Startet Auto-Close Task
+        bot.loop.create_task(auto_close_ticket(ticket_channel, self.user))
 
 class TicketView(discord.ui.View):
     def __init__(self, ticket_owner):
@@ -138,7 +140,6 @@ class CloseModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         channel = interaction.channel
         await channel.delete()
-        # Ticket wird sofort gelöscht, keine Bewertung mehr
 
 class TicketDropdown(discord.ui.Select):
     def __init__(self):
@@ -158,12 +159,9 @@ class TicketMenu(discord.ui.View):
         super().__init__()
         self.add_item(TicketDropdown())
 
-# Commands
-
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def ticket(ctx):
-    """Starte das Ticket-Menü (nur Admins)"""
     view = TicketMenu()
     await ctx.send("Bitte wähle den Ticket-Typ aus dem Dropdown-Menü:", view=view)
 
@@ -175,7 +173,6 @@ async def ticket_error(ctx, error):
 
 @bot.command()
 async def clear(ctx, amount: int = 5):
-    """Löscht Nachrichten, Standard 5"""
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.send("Du hast keine Berechtigung zum Löschen.", delete_after=5)
         return
@@ -213,9 +210,27 @@ async def on_member_join(member):
 
 @bot.event
 async def on_message(message):
-    # Blockiere DMs an Bot
     if not message.guild:
         return
     await bot.process_commands(message)
+
+# Auto-Close nach 10 Minuten Inaktivität
+async def auto_close_ticket(channel, ticket_owner):
+    await asyncio.sleep(600)
+    history = await channel.history(limit=1).flatten()
+    if not history:
+        return
+    last_message = history[0]
+    now = datetime.now(timezone.utc)
+    if (now - last_message.created_at) > timedelta(minutes=10):
+        try:
+            await ticket_owner.send(
+                f"⏳ Dein Ticket `{channel.name}` wurde wegen Inaktivität automatisch geschlossen."
+            )
+        except discord.Forbidden:
+            pass
+        await channel.send("❌ Dieses Ticket wurde wegen Inaktivität geschlossen.")
+        await asyncio.sleep(2)
+        await channel.delete()
 
 bot.run(TOKEN)
