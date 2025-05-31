@@ -1,19 +1,20 @@
-import os
-import json
 from dotenv import load_dotenv
-import discord
-from discord.ext import commands, tasks
+import os
 
 load_dotenv()
 TOKEN = os.getenv("DEIN_TOKEN")
 
+import discord
+from discord.ext import commands
+
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # für on_member_join
+intents.members = True  # Wichtig für on_member_join
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.remove_command('help')  # Eingebauten Help-Command entfernen
 
-# IDs anpassen
+# IDs anpassen:
 SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]
 AUTO_ROLE_ID = 1378097824041799792
 
@@ -24,50 +25,6 @@ CATEGORY_IDS = {
 }
 
 TEAM_ROLE_IDS = SUPPORT_ROLES
-
-XP_FILE = "xp.json"
-
-# --- XP & Level System ---
-
-def load_xp():
-    if not os.path.isfile(XP_FILE):
-        return {}
-    with open(XP_FILE, "r") as f:
-        return json.load(f)
-
-def save_xp(data):
-    with open(XP_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-def add_xp(user_id, amount):
-    data = load_xp()
-    user_id = str(user_id)
-    if user_id not in data:
-        data[user_id] = {"xp": 0, "level": 1}
-    data[user_id]["xp"] += amount
-    # Level up check
-    while data[user_id]["xp"] >= xp_to_next_level(data[user_id]["level"]):
-        data[user_id]["xp"] -= xp_to_next_level(data[user_id]["level"])
-        data[user_id]["level"] += 1
-    save_xp(data)
-
-def xp_to_next_level(level):
-    # Beispiel: 100 XP * Level
-    return 100 * level
-
-def get_level_data(user_id):
-    data = load_xp()
-    user_id = str(user_id)
-    if user_id not in data:
-        return {"xp": 0, "level": 1}
-    return data[user_id]
-
-def progress_bar(current, total, length=20):
-    filled_length = int(length * current // total)
-    bar = "█" * filled_length + "░" * (length - filled_length)
-    return bar
-
-# --- Ticket-System (wie vorher) ---
 
 class ProblemModal(discord.ui.Modal):
     def __init__(self, ticket_type, user):
@@ -227,8 +184,8 @@ async def help(ctx):
         "`!ticket` - Öffnet das Ticket-Menü (Admins only)\n"
         "`!clear [Anzahl]` - Löscht Nachrichten\n"
         "`!rules` - Zeigt die Discord-Regeln an\n"
-        "`!xp` - Zeigt dein Level und XP an\n"
         "`!help` - Zeigt diese Hilfe an\n"
+        "`!xp` - Zeigt dein Level und XP an\n"
     )
     await ctx.send(help_text)
 
@@ -243,49 +200,40 @@ async def rules(ctx):
     )
     await ctx.send(rules_text)
 
-@bot.command()
-async def xp(ctx):
-    data = get_level_data(ctx.author.id)
-    level = data["level"]
-    xp = data["xp"]
-    next_level_xp = xp_to_next_level(level)
-    bar = progress_bar(xp, next_level_xp)
-    embed = discord.Embed(title=f"Levelkarte von {ctx.author.display_name}", color=discord.Color.green())
-    embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
-    embed.add_field(name="Level", value=str(level), inline=True)
-    embed.add_field(name="XP", value=f"{xp} / {next_level_xp}", inline=True)
-    embed.add_field(name="Fortschritt", value=bar, inline=False)
-    await ctx.send(embed=embed)
-
 @bot.event
 async def on_member_join(member):
     guild = member.guild
     role = guild.get_role(AUTO_ROLE_ID)
     if role:
         await member.add_roles(role)
-    # Willkommensnachricht
-    channel = guild.system_channel
-    if channel:
-        embed = discord.Embed(
-            title=f"Willkommen auf {guild.name}, {member.name}!",
-            description=(
-                "Bitte lies unsere Regeln und verhalte dich freundlich:\n"
-                "1️⃣ Sei respektvoll.\n"
-                "2️⃣ Kein Spam oder Werbung.\n"
-                "3️⃣ Keine Beleidigungen.\n"
-                "4️⃣ Halte dich an die Discord Nutzungsbedingungen.\n\n"
-                "Schreibe `!help` für eine Liste der Befehle."
-            ),
-            color=discord.Color.blue()
-        )
-        await channel.send(content=member.mention, embed=embed)
+        print(f"Rolle {role.name} wurde an {member.name} vergeben.")
+
+@bot.event
+async def on_message(message):
+    # Blockiere DMs an Bot
+    if not message.guild:
+        return
+    await bot.process_commands(message)
+
+# Einfaches Level/XP-System (in-memory, ohne Speicher, nur Demo)
+user_xp = {}
+
+def get_level(xp):
+    return xp // 100  # z.B. 100 XP pro Level
+
+@bot.command()
+async def xp(ctx):
+    user_id = ctx.author.id
+    xp = user_xp.get(user_id, 0)
+    level = get_level(xp)
+    await ctx.send(f"{ctx.author.mention}, du hast Level {level} mit {xp} XP!")
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-    # XP bekommen pro Nachricht (z.B. 5 XP)
-    add_xp(message.author.id, 5)
+    # XP vergeben pro Nachricht
+    user_xp[message.author.id] = user_xp.get(message.author.id, 0) + 10
     await bot.process_commands(message)
 
 bot.run(TOKEN)
