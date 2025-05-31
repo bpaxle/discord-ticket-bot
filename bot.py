@@ -1,22 +1,26 @@
 from dotenv import load_dotenv
 import os
+import discord
+from discord.ext import commands
+from discord.utils import get
+from PIL import Image, ImageDraw, ImageFont
+import io
+import random
+import json
 
 load_dotenv()
 TOKEN = os.getenv("DEIN_TOKEN")
-
-import discord
-from discord.ext import commands
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # Wichtig für on_member_join
 
-# help_command=None deaktiviert den internen help-Command
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # IDs anpassen:
 SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]
 AUTO_ROLE_ID = 1378097824041799792
+WELCOME_CHANNEL_ID = 1376862356760049152  # Willkommenskanal
 
 CATEGORY_IDS = {
     "Technischer Support": 1378105582690631831,
@@ -25,6 +29,43 @@ CATEGORY_IDS = {
 }
 
 TEAM_ROLE_IDS = SUPPORT_ROLES
+
+# XP / Level System - Daten laden und speichern
+XP_FILE = "xp_data.json"
+
+def load_xp_data():
+    try:
+        with open(XP_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_xp_data(data):
+    with open(XP_FILE, "w") as f:
+        json.dump(data, f)
+
+xp_data = load_xp_data()
+
+def add_xp(user_id, amount=10):
+    user_id = str(user_id)
+    if user_id not in xp_data:
+        xp_data[user_id] = {"xp": 0, "level": 1}
+    xp_data[user_id]["xp"] += amount
+    level = xp_data[user_id]["level"]
+    xp = xp_data[user_id]["xp"]
+    # Level up alle 100 XP
+    while xp >= level * 100:
+        xp -= level * 100
+        level += 1
+    xp_data[user_id]["xp"] = xp
+    xp_data[user_id]["level"] = level
+    save_xp_data(xp_data)
+
+def get_xp(user_id):
+    user_id = str(user_id)
+    return xp_data.get(user_id, {"xp": 0, "level": 1})
+
+# Ticket-System und andere Klassen (ProblemModal, TicketView etc.) hier  (1:1 wie vorher, siehe unten)
 
 class ProblemModal(discord.ui.Modal):
     def __init__(self, ticket_type, user):
@@ -178,17 +219,6 @@ async def clear(ctx, amount: int = 5):
     await ctx.send(f"{len(deleted)-1} Nachrichten gelöscht.", delete_after=5)
 
 @bot.command()
-async def help(ctx):
-    help_text = (
-        "**Verfügbare Commands:**\n"
-        "`!ticket` - Öffnet das Ticket-Menü (Admins only)\n"
-        "`!clear [Anzahl]` - Löscht Nachrichten\n"
-        "`!rules` - Zeigt die Discord-Regeln an\n"
-        "`!help` - Zeigt diese Hilfe an\n"
-    )
-    await ctx.send(help_text)
-
-@bot.command()
 async def rules(ctx):
     rules_text = (
         "**Discord Regeln:**\n"
@@ -199,6 +229,18 @@ async def rules(ctx):
     )
     await ctx.send(rules_text)
 
+@bot.command()
+async def help(ctx):
+    help_text = (
+        "**Verfügbare Commands:**\n"
+        "`!ticket` - Öffnet das Ticket-Menü (Admins only)\n"
+        "`!clear [Anzahl]` - Löscht Nachrichten\n"
+        "`!rules` - Zeigt die Discord-Regeln an\n"
+        "`!xp` - Zeigt deine Levelkarte mit XP an\n"
+        "`!help` - Zeigt diese Hilfe an\n"
+    )
+    await ctx.send(help_text)
+
 @bot.event
 async def on_member_join(member):
     guild = member.guild
@@ -207,10 +249,73 @@ async def on_member_join(member):
         await member.add_roles(role)
         print(f"Rolle {role.name} wurde an {member.name} vergeben.")
 
+    welcome_channel = guild.get_channel(WELCOME_CHANNEL_ID)
+    if welcome_channel:
+        embed = discord.Embed(
+            title="Willkommen auf dem Server!",
+            description=f"Hallo {member.mention}, schön dass du hier bist! Bitte lese die Regeln und hab Spaß 🎉",
+            color=discord.Color.green()
+        )
+        await welcome_channel.send(embed=embed)
+
 @bot.event
 async def on_message(message):
-    if not message.guild:
+    # XP hinzufügen, wenn Nachricht in einem Server gesendet wird
+    if message.author.bot:
         return
+    if message.guild:
+        add_xp(message.author.id, amount=random.randint(5, 15))
     await bot.process_commands(message)
+
+# Levelkarte generieren mit PIL
+def create_level_card(user: discord.User, level: int, xp: int):
+    width, height = 400, 120
+    card = Image.new("RGBA", (width, height), (54, 57, 63, 255))
+    draw = ImageDraw.Draw(card)
+
+    # Profilbild laden
+    asset = user.display_avatar.replace(format="png", size=128)
+    data = asset.read()
+    avatar = Image.open(io.BytesIO(data)).resize((100, 100)).convert("RGBA")
+
+    # Kreis Maske für rundes Profilbild
+    mask = Image.new("L", avatar.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.ellipse((0, 0) + avatar.size, fill=255)
+
+    avatar = Image.composite(avatar, Image.new("RGBA", avatar.size), mask)
+    card.paste(avatar, (10, 10), avatar)
+
+    # Text
+    font = ImageFont.truetype("arial.ttf", 24)  # Arial muss verfügbar sein, sonst anpassen
+    font_small = ImageFont.truetype("arial.ttf", 18)
+    draw.text((120, 30), f"{user.name}", font=font, fill=(255, 255, 255, 255))
+    draw.text((120, 70), f"Level: {level}", font=font_small, fill=(255, 255, 255, 255))
+    draw.text((250, 70), f"XP: {xp} / {level*100}", font=font_small, fill=(255, 255, 255, 255))
+
+    # Balken für XP
+    bar_x, bar_y = 120, 100
+    bar_width = 260
+    bar_height = 15
+    draw.rectangle((bar_x, bar_y, bar_x + bar_width, bar_y + bar_height), fill=(100, 100, 100, 255))
+    xp_width = int((xp / (level * 100)) * bar_width)
+    draw.rectangle((bar_x, bar_y, bar_x + xp_width, bar_y + bar_height), fill=(255, 215, 0, 255))
+
+    # In Bytes speichern und zurückgeben
+    buffer = io.BytesIO()
+    card.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+@bot.command()
+async def xp(ctx, member: discord.Member = None):
+    if member is None:
+        member = ctx.author
+    data = get_xp(member.id)
+    level = data["level"]
+    xp_points = data["xp"]
+    card_image = create_level_card(member, level, xp_points)
+    file = discord.File(fp=card_image, filename="levelcard.png")
+    await ctx.send(file=file)
 
 bot.run(TOKEN)
