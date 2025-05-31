@@ -15,14 +15,14 @@ intents.members = True  # Wichtig für on_member_join
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # IDs anpassen:
-SUPPORT_ROLES = [123456875210, 5854855652]  # Rollen mit Supportrechten
-AUTO_ROLE_ID = 877412658123  # Rolle, die neuen Mitgliedern automatisch vergeben wird
+SUPPORT_ROLES = [1376861514274836581, 1376872221749936138]  # Rollen mit Supportrechten
+AUTO_ROLE_ID = 1378097824041799792  # Rolle, die neuen Mitgliedern automatisch vergeben wird
 
 # Ticket-Kategorien (IDs anpassen)
 CATEGORY_IDS = {
-    "Technischer Support": 874561213058,
-    "Bug": 87456612584263,
-    "Discord Hilfe": 87459102036,
+    "Technischer Support": 1378105582690631831,
+    "Bug": 1378105647341502615,
+    "Discord Hilfe": 1378105619579535510,
 }
 
 TEAM_ROLE_IDS = SUPPORT_ROLES  # Rollen die Tickets übernehmen/schließen dürfen
